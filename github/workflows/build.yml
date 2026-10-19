@@ -1,0 +1,310 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Create project files
+        run: |
+          mkdir -p .
+          cat > settings.gradle <<'VANTA_EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = 'vanta'
+          include ':app'
+          VANTA_EOF
+          mkdir -p .
+          cat > build.gradle <<'VANTA_EOF'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          VANTA_EOF
+          mkdir -p .
+          cat > gradle.properties <<'VANTA_EOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          VANTA_EOF
+          mkdir -p app
+          cat > app/build.gradle <<'VANTA_EOF'
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.vanta.player'
+              compileSdk 34
+              defaultConfig {
+                  applicationId 'com.vanta.player'
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          VANTA_EOF
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'VANTA_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <application
+                  android:label="vanta"
+                  android:icon="@drawable/ic_launcher"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask"
+                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          VANTA_EOF
+          mkdir -p app/src/main/res/drawable
+          cat > app/src/main/res/drawable/ic_launcher.xml <<'VANTA_EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="108" android:viewportHeight="108">
+              <path android:fillColor="#000000" android:pathData="M0,0h108v108h-108z"/>
+              <path android:strokeColor="#B69CFF" android:strokeWidth="5" android:fillColor="#00000000"
+                  android:pathData="M54,54m-30,0a30,30 0 1,0 60,0a30,30 0 1,0 -60,0"/>
+              <path android:strokeColor="#B69CFF" android:strokeWidth="5" android:fillColor="#00000000"
+                  android:pathData="M54,54m-14,0a14,14 0 1,0 28,0a14,14 0 1,0 -28,0"/>
+          </vector>
+          VANTA_EOF
+          mkdir -p app/src/main/java/com/vanta/player
+          cat > app/src/main/java/com/vanta/player/MainActivity.java <<'VANTA_EOF'
+          package com.vanta.player;
+
+          import android.app.Activity;
+          import android.content.ClipData;
+          import android.content.Intent;
+          import android.graphics.Color;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.webkit.ValueCallback;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+
+          public class MainActivity extends Activity {
+              private WebView web;
+              private ValueCallback<Uri[]> picker;
+
+              @Override
+              protected void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  getWindow().setStatusBarColor(Color.BLACK);
+                  getWindow().setNavigationBarColor(Color.BLACK);
+                  web = new WebView(this);
+                  web.setBackgroundColor(Color.BLACK);
+                  WebSettings s = web.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setMediaPlaybackRequiresUserGesture(false);
+                  web.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
+                          if (picker != null) picker.onReceiveValue(null);
+                          picker = callback;
+                          Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+                          i.addCategory(Intent.CATEGORY_OPENABLE);
+                          i.setType("audio/*");
+                          i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                          try {
+                              startActivityForResult(i, 1);
+                          } catch (Exception e) {
+                              picker = null;
+                              return false;
+                          }
+                          return true;
+                      }
+                  });
+                  setContentView(web);
+                  web.loadUrl("file:///android_asset/index.html");
+              }
+
+              @Override
+              protected void onActivityResult(int code, int result, Intent data) {
+                  if (code != 1 || picker == null) {
+                      super.onActivityResult(code, result, data);
+                      return;
+                  }
+                  Uri[] uris = null;
+                  if (result == RESULT_OK && data != null) {
+                      ClipData clip = data.getClipData();
+                      if (clip != null) {
+                          uris = new Uri[clip.getItemCount()];
+                          for (int k = 0; k < uris.length; k++) uris[k] = clip.getItemAt(k).getUri();
+                      } else if (data.getData() != null) {
+                          uris = new Uri[]{data.getData()};
+                      }
+                  }
+                  picker.onReceiveValue(uris);
+                  picker = null;
+              }
+
+              @Override
+              public void onBackPressed() {
+                  web.evaluateJavascript(
+                      "(function(){var f=document.getElementById('fp');if(f&&f.classList.contains('open')){f.classList.remove('open');return 1}return 0})()",
+                      v -> { if (!"1".equals(v)) moveTaskToBack(true); });
+              }
+          }
+          VANTA_EOF
+          mkdir -p app/src/main/assets
+          cat > app/src/main/assets/index.html <<'VANTA_EOF'
+          <!DOCTYPE html>
+          <html lang="ru">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+          <meta name="theme-color" content="#000000">
+          <meta name="apple-mobile-web-app-capable" content="yes">
+          <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+          <title>vanta — чёрный плеер</title>
+          <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&display=swap" rel="stylesheet">
+          <style>
+          :root{--bg:#000;--s2:#141416;--ln:rgba(255,255,255,.1);--tx:#f5f5f3;--mu:#8e8e97;--ac:#b69cff;--hd:'Unbounded','Arial Black',system-ui,sans-serif;color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+          html{scroll-padding-top:env(safe-area-inset-top,0px)}
+          *{box-sizing:inherit;margin:0;-webkit-tap-highlight-color:transparent}
+          [hidden]{display:none!important}
+          html,body{height:100%;background:var(--bg);color:var(--tx);font:15px/1.4 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;overflow:hidden;font-variant-numeric:tabular-nums}
+          button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+          button:focus-visible,input:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+          svg{display:block}
+          main{height:100%;overflow-y:auto;padding:20px 20px 200px}
+          h2{font:700 22px/1.15 var(--hd);letter-spacing:-.03em}
+          .logo{display:flex;align-items:center;gap:9px;font:700 20px var(--hd);letter-spacing:-.04em}
+          .logo svg{color:var(--ac)}
+          .mu,.m span,.wave p{color:var(--mu)}
+          .wave{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:22px 0 16px;padding:22px 8px 22px 22px;border-radius:34px;border:1px solid var(--ln)}
+          .wave p{font-size:13px;margin-top:8px;max-width:15ch}
+          .rings{position:relative;width:128px;height:128px;flex:none;display:grid;place-items:center}
+          .rings>svg{position:absolute;inset:0;width:100%;height:100%}
+          .go{flex:none;width:58px;height:58px;border-radius:50%;background:var(--ac);color:#000;display:grid;place-items:center;position:relative}
+          .go svg{width:28px;height:28px}
+          .chips{display:flex;gap:8px;overflow-x:auto;margin-bottom:8px;scrollbar-width:none}
+          .chips button{flex:none;padding:8px 16px;border-radius:99px;border:1px solid var(--ln);color:var(--mu)}
+          .chips .on{background:var(--tx);color:#000;border-color:var(--tx)}
+          .row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--ln)}
+          .row img{width:52px;height:52px;border-radius:14px;flex:none}
+          .m{flex:1;min-width:0}
+          .m b,.m span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+          .m span{font-size:13px}
+          .row.on b{color:var(--ac)}
+          .lk{width:42px;height:42px;display:grid;place-items:center;color:var(--mu);flex:none}
+          .lk.y{color:var(--ac)}.lk.y svg{fill:currentColor}
+          input[type=search]{width:100%;margin:16px 0 6px;padding:14px 20px;border-radius:99px;border:1px solid var(--ln);background:var(--bg);color:var(--tx);font:inherit}
+          .add{display:block;margin:16px 0 6px;padding:16px;border-radius:22px;border:1px dashed var(--ac);color:var(--ac);text-align:center;cursor:pointer}
+          nav{position:fixed;left:0;right:0;bottom:0;display:flex;padding:8px 0 calc(8px + env(safe-area-inset-bottom,0px));background:rgba(0,0,0,.9);-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);border-top:1px solid var(--ln);z-index:5}
+          nav button{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:11px;color:var(--mu)}
+          nav .on{color:var(--ac)}
+          #mini{position:fixed;left:10px;right:10px;bottom:calc(68px + env(safe-area-inset-bottom,0px));display:flex;align-items:center;gap:12px;padding:8px 10px;border-radius:99px;background:var(--s2);border:1px solid var(--ln);z-index:4}
+          #mini img{width:44px;height:44px;border-radius:50%;flex:none}
+          .pr{position:relative;width:44px;height:44px;flex:none;display:grid;place-items:center}
+          .pr .ring{position:absolute;inset:0;transform:rotate(-90deg)}
+          #fp{position:fixed;inset:0;z-index:9;display:flex;flex-direction:column;padding:calc(env(safe-area-inset-top,0px) + 10px) 24px calc(env(safe-area-inset-bottom,0px) + 22px);background:#000;transform:translateY(100%);visibility:hidden;transition:transform .35s cubic-bezier(.2,.8,.2,1),visibility 0s .35s}
+          #fp.open{transform:none;visibility:visible;transition:transform .35s cubic-bezier(.2,.8,.2,1),visibility 0s}
+          .top{display:flex;align-items:center;gap:8px;color:var(--mu);font-size:14px}
+          .top button{width:42px;height:42px;display:grid;place-items:center;margin-left:-10px}
+          .disc{position:relative;width:min(82vw,44vh,340px);aspect-ratio:1;margin:auto}
+          .disc canvas{position:absolute;inset:0;width:100%;height:100%}
+          .disc img{position:absolute;inset:19%;width:62%;height:62%;border-radius:50%;animation:sp 22s linear infinite;animation-play-state:paused}
+          .pl .disc img{animation-play-state:running}
+          @keyframes sp{to{transform:rotate(1turn)}}
+          @media (prefers-reduced-motion:reduce){.disc img{animation:none}}
+          .info{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:8px}
+          .info h2{font-size:20px}.info p{color:var(--mu);margin-top:4px}
+          input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:30px;background:transparent;margin-top:6px}
+          input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:linear-gradient(90deg,var(--ac) var(--p,0%),rgba(255,255,255,.16) 0)}
+          input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;margin-top:-6px;border-radius:50%;background:#fff;border:0}
+          input[type=range]::-moz-range-track{height:4px;border-radius:2px;background:rgba(255,255,255,.16)}
+          input[type=range]::-moz-range-progress{height:4px;border-radius:2px;background:var(--ac)}
+          input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:#fff;border:0}
+          .tm{display:flex;justify-content:space-between;font-size:12px;color:var(--mu)}
+          .ctl{display:flex;align-items:center;justify-content:space-between;margin-top:12px}
+          .ctl button{width:52px;height:52px;display:grid;place-items:center}
+          .ctl .go{width:76px;height:76px}.ctl .go svg{width:34px;height:34px}
+          .ctl .a{color:var(--ac)}
+          </style>
+          </head>
+          <body>
+          <main>
+           <section id="home">
+            <div class="logo"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="5"/></svg>vanta</div>
+            <div class="wave">
+             <div><h2>Моя волна</h2><p>Музыка без остановки под ваше настроение</p></div>
+             <div class="rings"><svg viewBox="0 0 128 128" fill="none" stroke="#b69cff" stroke-width="1.5"><circle cx="64" cy="64" r="62" opacity=".2"/><circle cx="64" cy="64" r="50" opacity=".4"/><circle cx="64" cy="64" r="38" opacity=".7"/></svg><button class="go" id="wv" aria-label="Включить волну"></button></div>
+            </div>
+            <div class="chips" id="chips"></div>
+            <div id="l1"></div>
+           </section>
+           <section id="search" hidden>
+            <h2>Поиск</h2>
+            <input id="q" type="search" placeholder="Трек или исполнитель">
+            <div id="l2"></div>
+           </section>
+           <section id="lib" hidden>
+            <h2>Коллекция</h2>
+            <label class="add">Добавить свои треки с устройства<input id="file" type="file" accept="audio/*" multiple hidden></label>
+            <div id="l3"></div>
+           </section>
+          </main>
+
+          <div id="mini" hidden>
+           <img id="mi" alt="">
+           <div class="m"><b id="mt"></b><span id="ma"></span></div>
+           <div class="pr"><svg class="ring" viewBox="0 0 44 44" width="44" height="44" fill="none" stroke-width="2"><circle cx="22" cy="22" r="20" stroke="rgba(255,255,255,.14)"/><circle id="rg" cx="22" cy="22" r="20" stroke="#b69cff" stroke-linecap="round" stroke-dasharray="125.7" stroke-dashoffset="125.7"/></svg><button id="mp" aria-label="Играть или пауза"></button></div>
+          </div>
+
+          <nav>
+           <button data-t="home" class="on" data-i="home">Главная</button>
+           <button data-t="search" data-i="search">Поиск</button>
+           <button data-t="lib" data-i="lib">Коллекция</button>
+          </nav>
+
+          <div id="fp">
+           <div class="top"><button id="cl" data-i="down" aria-label="Свернуть"></button>Сейчас играет</div>
+           <div class="disc"><canvas id="rc" width="680" height="680"></canvas><img id="cv" alt=""></div>
+           <div class="info"><div class="m"><h2 id="ft"></h2><p id="fa"></p></div><button class="lk" id="fl" data-i="heart" aria-label="Нравится"></button></div>
+           <input id="sk" type="range" min="0" max="1000" value="0" aria-label="Перемотка">
+           <div class="tm"><span id="t1">0:00</span><span id="t2">0:00</span></div>
+           <div class="ctl"><button id="sh" data-i="shuffle" aria-label="Вперемешку"></button><button id="pv" data-i="prev" aria-label="Назад"></button><button id="pp" class="go" aria-label="Играть или пауза"></button><button id="nx" data-i="next" aria-label="Дальше"></button><button id="rp" data-i="repeat" aria-label="Повтор трека"></button></div>
+          </div>
+
+          <script>
+          const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s),esc=s=>s.replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';');
+          const P={home:['<path d="M4 11l8-7 8 7v9H4z"/>',0],search:['<circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/>',0],lib:['<path d="M5 4v16M10 4v16M15 6l4 14"/>',0],play:['<path d="M8 5v14l11-7z"/>',1],pause:['<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>',1],next:['<path d="M6 6l9 6-9 6zM17 6h2v12h-2z"/>',1],prev:['<path d="M18 6l-9 6 9 6zM5 6h2v12H5z"/>',1],heart:['<path d="M12 20S4 15 4 9.6A4.4 4.4 0 0 1 12 7a4.4 4.4 0 0 1 8 2.6C20 15 12 20 12 20z"/>',0],shuffle:['<path d="M3 7h4l10 10h4M3 17h4l3-3M14 10l3-3h4M18 4l3 3-3 3M18 14l3 3-3 3"/>',0],repeat:['<path d="M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3"/>',0],down:['<path d="M6 9l6 6 6-6"/>',0]};
+          const I=k=>{const[p,f]=P[k];return`<svg viewBox="0 0 24 24" width="24" height="24" ${f?'fill="currentColor"':'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"'}>${p}</svg>`};
+          const ls=(k,v)=>{try{return v==null?localStorage.getItem(k):localStorage.setItem(k,v)}catch(e){}};
+          const fmt=s=>isFinite(s)&&s>=0?(s/60|0)+':'+String(s%60|0).padStart(2,'0'):'0:00';
+          const T=[['Ночной автобус','Vanta Lab',92,45,[0,3,5,7,10],'tri',11],['Тихий неон','Vanta Lab',110,48,[0,2,3,7,9],'sine',23],['Чёрное солнце','Полярный шум',78,43,[0,3,7,8,10],'saw',37],['Нулевой километр','Полярный шум',124,50,[0,2,4,7,9],'sq',41],['Глубокая вода','Остров',64,40,[0,3,5,7,10],'sine',53],['Свет в тоннеле','Остров',100,47,[0,2,5,7,9],'tri',67]];
+          const M=[['Всё',0,999],['Спокойно',0,85],['Ночь',85,105],['Драйв',105,999]];
+          const lib=T.map((a,i)=>({id:'s'+i,title:a[0],artist:a[1],bpm:a[2],root:a[3],sc:a[4],wv:a[5],seed:a[6]}));
+          let mood=0,cur=null,Q=[],shuf=0,rep=0;
+          const L=new Set(JSON.parse(ls('vanta.likes')||'[]'));
+          const A=new Audio();A.preload='auto';
+
+          /* демо-треки синтезируются прямо здесь, внешних файлов нет */
+          function synth(t){
+           const sr=22050,n=sr*30,d=new Float32Array(n),beat=60/t.bpm,dl=beat*.75*sr|0,sc=t.sc;
+           let s=t.seed*977+1;const r=()=>(s=s*16807%2147483647)/2147483647,S=p=>Math.sin(6.2832*p),f=m=>440*2**((m-69)/12);
+           const osc=p=>t.wv=='saw'?2*(p%1)-1:t.wv=='sq'?(p%1<.5?1:-1):t.wv=='tri'?4*Math.abs(p%1-.5)-1:S(p),lv=t.wv=='saw'||t.wv=='sq'?.07:.15;
+           const note=(st,len,fr,v,k,fn)=>{const a=st*sr|0,l=len*sr|0;for(let i=0;i<l&&a+i<n;i++){const x=i/sr;d[a+i]+=v*Math.exp(-k*x)*Math.min(1,i/180)*(fn||osc)(fr*x)}};
+           fo
